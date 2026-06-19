@@ -1,0 +1,8 @@
+.env
+*.log
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+state.json
+run.lock
