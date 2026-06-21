@@ -32,6 +32,11 @@ AUTO_MUTE_THRESHOLD = int(os.environ.get("QUIET_BOT_AUTO_MUTE_THRESHOLD", "5"))
 REPORT_MAX_AGE_MINUTES = int(os.environ.get("QUIET_BOT_REPORT_MAX_AGE_MINUTES", "30"))
 REPORT_RATE_LIMIT = int(os.environ.get("QUIET_BOT_REPORT_RATE_LIMIT", "5"))
 TEMP_MUTE_HOURS = int(os.environ.get("QUIET_BOT_TEMP_MUTE_HOURS", "1"))
+REMINDER_TIMES = tuple(
+    item.strip() for item in os.environ.get("QUIET_BOT_REMINDER_TIMES", "09:30,14:00,20:00,23:30").split(",")
+    if item.strip()
+)
+REMINDER_DISPLAY_NAME = os.environ.get("QUIET_BOT_REMINDER_NAME", "ညကင်း")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 SEND_PERMISSION_FIELDS = (
@@ -158,6 +163,19 @@ def parse_command(message: dict[str, Any]) -> tuple[str, list[str]]:
 def display_name(user: dict[str, Any]) -> str:
     name = " ".join(part for part in (user.get("first_name"), user.get("last_name")) if part)
     return name or user.get("username") or str(user.get("id", "unknown"))
+
+
+def reminder_text(bot_username: str) -> str:
+    return (
+        f'မင်္ဂလာပါ ။ ကျနော် က "{REMINDER_DISPLAY_NAME}" ပါ\n\n'
+        "Group နဲ့ မသက်ဆိုင်တဲ့\n"
+        "message၊ spam၊ ကြော်ငြာ သို့မဟုတ်\n"
+        "မသင့်တော်တဲ့ message တွေ့ရင်\n"
+        "ကူညီ report လုပ်ပေးနိုင်ပါတယ်\n\n"
+        "Report လုပ်နည်း 👇\n\n"
+        "1️⃣ Report လုပ်လိုတဲ့ message ကို Reply နှိပ်ပါ\n"
+        f"2️⃣ /report@{bot_username} လို့ပို့ပါ"
+    )
 
 
 def is_admin(chat_id: int, user_id: int) -> bool:
@@ -629,6 +647,27 @@ def reconcile_quiet_hours(state: dict[str, Any]) -> None:
     save_state(state)
 
 
+def send_due_reminders(state: dict[str, Any], now: datetime | None = None) -> None:
+    now = now or datetime.now(TIMEZONE)
+    slot = now.strftime("%H:%M")
+    if slot not in REMINDER_TIMES:
+        return
+    today = now.date().isoformat()
+    sent = state.setdefault("reminders_sent", {})
+    state["reminders_sent"] = {key: value for key, value in sent.items() if key.startswith(today + "|")}
+    sent = state["reminders_sent"]
+    username: str | None = None
+    for chat_id in state.get("chats", {}):
+        key = f"{today}|{slot}|{chat_id}"
+        if key in sent:
+            continue
+        if username is None:
+            username = api("getMe")["username"]
+        api("sendMessage", chat_id=int(chat_id), text=reminder_text(username))
+        sent[key] = now.isoformat()
+        save_state(state)
+
+
 def register_commands() -> None:
     api(
         "setMyCommands",
@@ -653,6 +692,7 @@ def tick() -> None:
         state = load_state()
         process_updates(state)
         reconcile_quiet_hours(state)
+        send_due_reminders(state)
 
 
 def daemon() -> None:
@@ -672,6 +712,7 @@ def daemon() -> None:
             try:
                 process_updates(state, poll_timeout=25)
                 reconcile_quiet_hours(state)
+                send_due_reminders(state)
             except TelegramError:
                 LOG.exception("Telegram loop failed; retrying")
                 time.sleep(5)

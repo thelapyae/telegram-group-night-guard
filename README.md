@@ -91,6 +91,8 @@ QUIET_BOT_AUTO_MUTE_THRESHOLD=5
 QUIET_BOT_REPORT_MAX_AGE_MINUTES=30
 QUIET_BOT_REPORT_RATE_LIMIT=5
 QUIET_BOT_TEMP_MUTE_HOURS=1
+QUIET_BOT_REMINDER_TIMES=09:30,14:00,20:00,23:30
+QUIET_BOT_REMINDER_NAME=ညကင်း
 ```
 
 Never commit `.env` or paste a real bot token into an issue, log, screenshot, or
@@ -105,6 +107,10 @@ Open the user's crontab with `crontab -e` and add:
 The first cron invocation keeps the daemon running. Later invocations exit because
 of the process lock. If the process or server restarts, cron starts it again within
 one minute. `run.sh` remains available for one-shot polling installations.
+
+The optional reminder schedule uses the same IANA timezone as quiet hours. Each
+configured time sends one Burmese-friendly reporting reminder per group, with a
+daily state guard that prevents duplicate delivery when the daemon loops.
 
 ## Configure a group
 

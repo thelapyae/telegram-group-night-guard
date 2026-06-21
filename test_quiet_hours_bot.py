@@ -80,6 +80,32 @@ class QuietHoursTests(unittest.TestCase):
             for button in row:
                 self.assertLessEqual(len(button["callback_data"].encode()), 64)
 
+    def test_reminder_is_sent_once_per_slot(self):
+        original_api = BOT.api
+        original_save_state = BOT.save_state
+        original_times = BOT.REMINDER_TIMES
+        calls = []
+
+        def fake_api(method, **params):
+            calls.append((method, params))
+            return {"username": "test_guard_bot"} if method == "getMe" else {"message_id": 1}
+
+        try:
+            BOT.api = fake_api
+            BOT.save_state = lambda state: None
+            BOT.REMINDER_TIMES = ("09:30",)
+            state = {"chats": {"-1001": {"title": "Test"}}}
+            now = datetime(2026, 6, 21, 9, 30, tzinfo=ZoneInfo("Asia/Yangon"))
+            BOT.send_due_reminders(state, now)
+            BOT.send_due_reminders(state, now)
+            sent_messages = [params for method, params in calls if method == "sendMessage"]
+            self.assertEqual(len(sent_messages), 1)
+            self.assertIn("/report@test_guard_bot", sent_messages[0]["text"])
+        finally:
+            BOT.api = original_api
+            BOT.save_state = original_save_state
+            BOT.REMINDER_TIMES = original_times
+
 
 if __name__ == "__main__":
     unittest.main()
