@@ -4,9 +4,10 @@
   <img src="assets/night-guard.png" width="280" alt="Telegram Group Night Guard pixel-art profile image">
 </p>
 
-Automatically close a Telegram group at night and reopen it in the morning.
-Night Guard changes the default sending permissions for non-admin members, so it
-works efficiently even in very large groups and linked channel discussion groups.
+Automatically close a Telegram group at night, reopen it in the morning, and let
+the community report off-topic or abusive messages for administrator review.
+Night Guard works efficiently even in very large groups and linked channel
+discussion groups.
 
 ## The problem
 
@@ -15,6 +16,11 @@ arguments, and off-topic messages may remain visible for hours while moderators
 are asleep. Telegram has Slow Mode, but it does not provide a daily quiet-hours
 schedule that completely prevents members from sending messages.
 
+Large communities also need a safe way for members to flag irrelevant content
+without giving every member the power to ban someone. A raw `/ban` command for
+everyone would be easy to abuse, while asking a bot to guess the "most recent"
+message could punish the wrong person during a busy conversation.
+
 Night Guard solves this by:
 
 - locking member sending permissions at a configured hour;
@@ -22,24 +28,28 @@ Night Guard solves this by:
 - checking the expected state every minute, so it recovers after a server reboot
   or a missed schedule boundary;
 - using one group-wide Telegram API call instead of looping over every member.
+- accepting reply-based reports from unique community members;
+- requiring administrator confirmation before a permanent ban;
+- temporarily muting a reported user for one hour after five unique reports.
 
 Administrators are not affected by Telegram's default chat permissions and can
 still post during quiet hours.
 
 ## How it works
 
-The included cron job starts a short Python process once per minute. The process:
+The included cron watchdog keeps one long-polling Python process running. The process:
 
-1. reads commands received through Telegram `getUpdates`;
+1. receives commands and moderation-button actions immediately through Telegram
+   `getUpdates` long polling;
 2. calculates the current time in the configured IANA timezone;
 3. changes permissions only when the group needs to transition between locked and
    unlocked mode;
-4. saves the update offset, original permissions, and current mode in a small local
-   JSON state file.
+4. stores report cases and audit events in local SQLite;
+5. saves the update offset, original permissions, and current mode in a small JSON
+   state file.
 
-There is no member database, webhook, public domain, or continuously running
-process. The bot uses Python's standard library and has no third-party package
-dependencies.
+There is no webhook, public domain, external database, or third-party Python
+dependency.
 
 ## Requirements
 
@@ -47,14 +57,15 @@ dependencies.
 - Python 3.10 or newer
 - Telegram bot token from [@BotFather](https://t.me/BotFather)
 - Bot administrator access with **Restrict Members** (sometimes shown as
-  **Ban Users**) permission
+  **Ban Users**) and **Delete Messages** permissions
 
 ## Telegram setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and keep its token secret.
 2. For a channel, open **Channel settings → Discussion** and enter the linked
    discussion group. Add the bot to the discussion group, not only the channel.
-3. Promote the bot to administrator and enable **Restrict Members**.
+3. Promote the bot to administrator and enable **Restrict Members** and
+   **Delete Messages**.
 
 ## VPS installation
 
@@ -64,7 +75,7 @@ cd telegram-group-night-guard
 cp .env.example .env
 chmod 600 .env
 nano .env
-chmod 700 run.sh quiet_hours_bot.py
+chmod 700 run.sh run-daemon.sh quiet_hours_bot.py
 ```
 
 Set the new token in `.env`:
@@ -75,6 +86,11 @@ QUIET_BOT_TIMEZONE=Asia/Yangon
 QUIET_BOT_LOCK_HOUR=23
 QUIET_BOT_UNLOCK_HOUR=9
 QUIET_BOT_DATA_DIR=/home/your-user/.local/share/telegram-quiet-hours
+QUIET_BOT_REPORT_THRESHOLD=3
+QUIET_BOT_AUTO_MUTE_THRESHOLD=5
+QUIET_BOT_REPORT_MAX_AGE_MINUTES=30
+QUIET_BOT_REPORT_RATE_LIMIT=5
+QUIET_BOT_TEMP_MUTE_HOURS=1
 ```
 
 Never commit `.env` or paste a real bot token into an issue, log, screenshot, or
@@ -83,8 +99,12 @@ chat. If a token is exposed, revoke it immediately with BotFather.
 Open the user's crontab with `crontab -e` and add:
 
 ```cron
-* * * * * /absolute/path/telegram-group-night-guard/run.sh >>/absolute/path/telegram-group-night-guard/bot.log 2>&1
+* * * * * /absolute/path/telegram-group-night-guard/run-daemon.sh >>/absolute/path/telegram-group-night-guard/bot.log 2>&1
 ```
+
+The first cron invocation keeps the daemon running. Later invocations exit because
+of the process lock. If the process or server restarts, cron starts it again within
+one minute. `run.sh` remains available for one-shot polling installations.
 
 ## Configure a group
 
@@ -117,6 +137,49 @@ set +a
 python3 quiet_hours_bot.py configure -1001234567890
 ```
 
+## Community moderation workflow
+
+### Report a message
+
+Any member can reply to a message sent within the last 30 minutes:
+
+```text
+/report@your_bot_username
+```
+
+Safeguards:
+
+- one report per reporter per message;
+- maximum five reports per reporter per hour;
+- self-reports, bot reports, and reports against administrators are rejected;
+- three unique reports create an administrator review panel;
+- five unique reports temporarily mute the user for one hour;
+- only an administrator can confirm a permanent ban.
+
+The review panel provides **Ban & delete**, **Mute**, and **Dismiss** buttons.
+Button clicks are checked against current Telegram administrator status.
+Dismissal after an automatic mute closes the report case but does not end the
+one-hour safety mute early.
+
+### Direct administrator ban
+
+An administrator can reply to the exact offending message:
+
+```text
+/ban@your_bot_username
+```
+
+Night Guard never guesses which "recent message" the administrator intended.
+Replying creates an exact, race-free target. In a supergroup, Telegram permanently
+bans the user and revokes their previous messages. Use this carefully.
+
+Other administrator commands:
+
+```text
+/reports
+/unban USER_ID
+```
+
 ## Cost
 
 | Item | Cost |
@@ -126,10 +189,11 @@ python3 quiet_hours_bot.py configure -1001234567890
 | Existing always-on VPS | Usually no additional cost |
 | New VPS | Provider-dependent; the smallest general-purpose plan is normally enough |
 | Domain and TLS certificate | Not required |
-| External database | Not required |
+| External database | Not required; SQLite is included with Python |
 
-The job runs briefly once per minute and performs permission updates only at mode
-transitions. CPU, memory, disk, and network use are minimal.
+Long polling waits for Telegram updates without consuming meaningful CPU. Permission
+updates happen only at mode transitions. CPU, memory, disk, and network use remain
+minimal for a typical community.
 
 ## Where it can run
 
@@ -137,8 +201,8 @@ transitions. CPU, memory, disk, and network use are minimal.
   handling, and no additional service dependency.
 - **Home server, NAS, or Raspberry Pi:** works if the machine and internet
   connection remain available overnight.
-- **Docker host:** possible by running the script on a one-minute scheduler and
-  mounting persistent storage for the state file.
+- **Docker host:** possible by running the daemon and mounting persistent storage
+  for the state and SQLite files.
 - **Vercel:** possible only after adapting the polling design to webhooks and
   Vercel Cron. Hobby cron timing may not be precise enough for strict boundaries.
 - **GitHub Actions:** technically possible, but scheduled workflows are not
@@ -147,8 +211,9 @@ transitions. CPU, memory, disk, and network use are minimal.
 ## Security and privacy
 
 - The bot token is loaded from `.env`, which is excluded by `.gitignore`.
-- State is stored locally with mode `0600` and contains group IDs, titles,
-  permissions, and Telegram update offsets—not member messages or member lists.
+- State and SQLite files use mode `0600`. The database stores reporter IDs, reported
+  user IDs, message IDs, timestamps, case status, and an administrator audit log.
+  It does not store message text or a member list.
 - The bot does not need to read ordinary conversation content. Telegram Privacy
   Mode can remain enabled.
 - Run the bot as an unprivileged operating-system user. Root access is unnecessary.
@@ -161,6 +226,8 @@ transitions. CPU, memory, disk, and network use are minimal.
 - A group's original daytime permissions must be captured before the first night
   lock. Night Guard preserves those permissions when reopening the group.
 - Times are whole hours in the current release.
+- Telegram's `banChatMember` revokes the banned user's previous messages in a
+  supergroup. If that is too destructive, use the temporary mute action instead.
 
 ## Development
 
