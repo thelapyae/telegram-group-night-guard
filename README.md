@@ -110,7 +110,15 @@ one minute. `run.sh` remains available for one-shot polling installations.
 
 The optional reminder schedule uses the same IANA timezone as quiet hours. Each
 configured time sends one Burmese-friendly reporting reminder per group, with a
-daily state guard that prevents duplicate delivery when the daemon loops.
+daily state guard that prevents duplicate delivery when the daemon loops. Before
+sending, Night Guard deletes its previous scheduled reminder so only the latest
+reminder remains in the group. Moderation alerts and decisions are preserved.
+
+Send or replace the reminder immediately:
+
+```bash
+./run.sh remind
+```
 
 ## Configure a group
 
@@ -155,6 +163,8 @@ Any member can reply to a message sent within the last 30 minutes:
 
 Safeguards:
 
+- `/report` command messages are deleted automatically; a command that is not a
+  reply is silently discarded to prevent test-message flooding;
 - one report per reporter per message;
 - maximum five reports per reporter per hour;
 - self-reports, bot reports, and reports against administrators are rejected;

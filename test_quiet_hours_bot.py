@@ -74,6 +74,28 @@ class QuietHoursTests(unittest.TestCase):
                 BOT.APP_DIR = original_app_dir
                 BOT.DATABASE_FILE = original_database_file
 
+    def test_report_without_reply_is_deleted_silently(self):
+        original_api = BOT.api
+        calls = []
+
+        def fake_api(method, **params):
+            calls.append((method, params))
+            return True
+
+        try:
+            BOT.api = fake_api
+            BOT.handle_report(
+                {
+                    "message_id": 99,
+                    "text": "/report@test_guard_bot",
+                    "chat": {"id": -1001, "type": "supergroup"},
+                    "from": {"id": 42, "first_name": "Tester"},
+                }
+            )
+            self.assertEqual(calls, [("deleteMessage", {"chat_id": -1001, "message_id": 99})])
+        finally:
+            BOT.api = original_api
+
     def test_callback_data_fits_telegram_limit(self):
         keyboard = BOT.moderation_keyboard(2_147_483_647)
         for row in keyboard["inline_keyboard"]:
@@ -101,10 +123,33 @@ class QuietHoursTests(unittest.TestCase):
             sent_messages = [params for method, params in calls if method == "sendMessage"]
             self.assertEqual(len(sent_messages), 1)
             self.assertIn("/report@test_guard_bot", sent_messages[0]["text"])
+            self.assertEqual(state["last_reminder_message_ids"]["-1001"], 1)
         finally:
             BOT.api = original_api
             BOT.save_state = original_save_state
             BOT.REMINDER_TIMES = original_times
+
+    def test_new_reminder_deletes_previous_reminder(self):
+        original_api = BOT.api
+        original_save_state = BOT.save_state
+        calls = []
+
+        def fake_api(method, **params):
+            calls.append((method, params))
+            return {"message_id": 200}
+
+        try:
+            BOT.api = fake_api
+            BOT.save_state = lambda state: None
+            state = {"last_reminder_message_ids": {"-1001": 100}}
+            result = BOT.send_reminder(state, -1001, "test_guard_bot")
+            self.assertEqual(result, 200)
+            self.assertEqual([method for method, _ in calls], ["deleteMessage", "sendMessage"])
+            self.assertEqual(calls[0][1]["message_id"], 100)
+            self.assertEqual(state["last_reminder_message_ids"]["-1001"], 200)
+        finally:
+            BOT.api = original_api
+            BOT.save_state = original_save_state
 
 
 if __name__ == "__main__":

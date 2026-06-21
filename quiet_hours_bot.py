@@ -398,8 +398,11 @@ def handle_report(message: dict[str, Any]) -> None:
     chat_id = chat.get("id")
     if chat.get("type") not in {"group", "supergroup"} or not chat_id:
         return
+    try:
+        api("deleteMessage", chat_id=chat_id, message_id=message["message_id"])
+    except (TelegramError, KeyError):
+        LOG.warning("Could not delete /report command in chat %s", chat_id)
     if not replied or not replied.get("from"):
-        api("sendMessage", chat_id=chat_id, text="Reply to the offending message with /report.")
         return
     target = replied["from"]
     if target.get("id") == reporter.get("id"):
@@ -647,6 +650,20 @@ def reconcile_quiet_hours(state: dict[str, Any]) -> None:
     save_state(state)
 
 
+def send_reminder(state: dict[str, Any], chat_id: int, bot_username: str) -> int:
+    reminder_ids = state.setdefault("last_reminder_message_ids", {})
+    previous_message_id = reminder_ids.get(str(chat_id))
+    if previous_message_id:
+        try:
+            api("deleteMessage", chat_id=chat_id, message_id=previous_message_id)
+        except TelegramError:
+            LOG.warning("Could not delete previous reminder %s in chat %s", previous_message_id, chat_id)
+    result = api("sendMessage", chat_id=chat_id, text=reminder_text(bot_username))
+    reminder_ids[str(chat_id)] = result["message_id"]
+    save_state(state)
+    return result["message_id"]
+
+
 def send_due_reminders(state: dict[str, Any], now: datetime | None = None) -> None:
     now = now or datetime.now(TIMEZONE)
     slot = now.strftime("%H:%M")
@@ -663,9 +680,17 @@ def send_due_reminders(state: dict[str, Any], now: datetime | None = None) -> No
             continue
         if username is None:
             username = api("getMe")["username"]
-        api("sendMessage", chat_id=int(chat_id), text=reminder_text(username))
+        send_reminder(state, int(chat_id), username)
         sent[key] = now.isoformat()
         save_state(state)
+
+
+def send_reminders_now() -> None:
+    state = load_state()
+    username = api("getMe")["username"]
+    for chat_id in state.get("chats", {}):
+        message_id = send_reminder(state, int(chat_id), username)
+        print(f"Sent reminder {message_id} to chat {chat_id}")
 
 
 def register_commands() -> None:
@@ -728,6 +753,7 @@ def main() -> None:
     configure = subcommands.add_parser("configure", help="Configure a group by numeric chat ID")
     configure.add_argument("chat_id", type=int)
     subcommands.add_parser("daemon", help="Run continuous long polling")
+    subcommands.add_parser("remind", help="Replace the previous reminder in every configured group")
     args = parser.parse_args()
     if args.command == "configure":
         state = load_state()
@@ -736,6 +762,8 @@ def main() -> None:
         print(f"Configured {entry['title']} ({args.chat_id}); mode={entry['mode']}")
     elif args.command == "daemon":
         daemon()
+    elif args.command == "remind":
+        send_reminders_now()
     else:
         tick()
 
