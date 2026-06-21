@@ -398,8 +398,11 @@ def handle_report(message: dict[str, Any]) -> None:
     chat_id = chat.get("id")
     if chat.get("type") not in {"group", "supergroup"} or not chat_id:
         return
+    try:
+        api("deleteMessage", chat_id=chat_id, message_id=message["message_id"])
+    except (TelegramError, KeyError):
+        LOG.warning("Could not delete /report command in chat %s", chat_id)
     if not replied or not replied.get("from"):
-        api("sendMessage", chat_id=chat_id, text="Reply to the offending message with /report.")
         return
     target = replied["from"]
     if target.get("id") == reporter.get("id"):

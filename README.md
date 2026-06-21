@@ -163,6 +163,8 @@ Any member can reply to a message sent within the last 30 minutes:
 
 Safeguards:
 
+- `/report` command messages are deleted automatically; a command that is not a
+  reply is silently discarded to prevent test-message flooding;
 - one report per reporter per message;
 - maximum five reports per reporter per hour;
 - self-reports, bot reports, and reports against administrators are rejected;

@@ -74,6 +74,28 @@ class QuietHoursTests(unittest.TestCase):
                 BOT.APP_DIR = original_app_dir
                 BOT.DATABASE_FILE = original_database_file
 
+    def test_report_without_reply_is_deleted_silently(self):
+        original_api = BOT.api
+        calls = []
+
+        def fake_api(method, **params):
+            calls.append((method, params))
+            return True
+
+        try:
+            BOT.api = fake_api
+            BOT.handle_report(
+                {
+                    "message_id": 99,
+                    "text": "/report@test_guard_bot",
+                    "chat": {"id": -1001, "type": "supergroup"},
+                    "from": {"id": 42, "first_name": "Tester"},
+                }
+            )
+            self.assertEqual(calls, [("deleteMessage", {"chat_id": -1001, "message_id": 99})])
+        finally:
+            BOT.api = original_api
+
     def test_callback_data_fits_telegram_limit(self):
         keyboard = BOT.moderation_keyboard(2_147_483_647)
         for row in keyboard["inline_keyboard"]:
